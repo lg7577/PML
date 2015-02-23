@@ -1,0 +1,140 @@
+
+---
+title: "Practical Machine Learning"
+subtitle: "(weight lifting exercise manner prediction)"
+author: "Saulius Ces"
+date: "20/02/2015"
+output: html_document
+---
+
+#### 1. Brief Introduction
+
+This report describes a process of building an accurate prediction algorithm to predict weight lifting exercise manner using data from accelerometers on the belt, forearm, arm, and dumbell. More information about the dataset can be found here: http://groupware.les.inf.puc-rio.br/har
+
+The main goal of the projct is to build several prediction models, compere them using a cross-validation and choose the most accurate one to predict resuls using the testing dataset.
+
+#### 2. Downloading dataset
+
+```{r,warning=FALSE,message=FALSE}
+#Loading relevant libraries
+library(caret)
+library(rpart)
+library(randomForest)
+
+#Downloading files
+training_url  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testing_url  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+#Reading files
+training  <- read.csv(training_url, na.strings=c("NA",""))
+testing  <- read.csv(testing_url, na.strings=c("NA",""))
+```
+
+#### 3. Cleaning and preprocessing data
+
+First of all, we remove rows which have many NA values. The benchmark value is set to be 80%.
+
+```{r}
+count <- dim(training)[1]*0.8
+indices <- which(colSums(is.na(training))>count)
+training_new <- training[,-indices]
+```
+
+This allowed us to reduce the number of variables down to 60. However, there are also some variables in the dataset that are related to the data collection process (`id`, `user_name`, `new_window` etc.). These variables are irrelevant and might disrupt our prediction model (i.e. some people might almost always do a lifting exercise correct).Therefore, We need to delete them:
+
+```{r}
+#Excluding prediction unrelated variables
+bad  <- 1:7
+training_new  <- training_new[,-bad]
+```
+
+As for the prediction, we might also want to remove variables that are highly correlated with each other. Firstly, they do not provide much additional information. Secondly, including unnecessary variables will make the prediction algorithm to run slower (especially random forests). The benchmark of highly correlated variables is set to 80%.
+
+```{r}
+#Excluding highly correlated variables
+cor_matrix  <- cor(training_new[,-53])
+hcor  <- findCorrelation(cor_matrix, cutoff = .80, verbose=FALSE)
+training_final  <- training_new[,-hcor]
+```
+
+#### 4. Choosing a prediction model
+
+While choosing a prediction model several options were considered:
+
+* Prediction with regression
+* Prediction with trees
+* Prediction with random forests
+
+Predicting factor variables using linear regression models might be tricky. Additionally, they are more useful for modelling and understanding behavior of variables. Therefore, only trees and random forests algorithms were decided to be used for predicting weigh lifting manner.
+
+In order to compare both models and get an expect out-of-sample error rate, we need to perform a cross-validation:
+
+* We randomly split the testing dataset into `mytraining` / `mytesting` sets with a 70% / 30% proportions using `createDataPartition()`
+* We repeat this process 30 times and draw histograms with overlaid density to compare both models and examine variability
+* We choose a more accurate model and apply it to the original `testing` set saving results separately as `.txt` files.
+
+```{r, eval=FALSE}
+#Cross-validation (Random resampling x30)
+n  <- 30
+model1_acc  <- vector()
+model2_acc  <- vector()
+for(i in 1:n){
+      inTrain  <- createDataPartition(training$classe, p = 0.7, list=FALSE)
+      mytraining  <- training[inTrain,]
+      mytesting  <- training[-inTrain,]
+      
+      model1 <- rpart(classe ~ ., data=mytraining)
+      pred1  <- predict(model1,newdata=mytesting, type="class")
+      acc1  <- confusionMatrix(pred1,mytesting$classe)$overall[1]
+      model1_acc[i]  <- acc1
+
+      model2 <- randomForest(classe ~. , data=mytraining)
+      pred2  <- predict(model2,newdata=mytesting)
+      acc2  <- confusionMatrix(pred2,mytesting$classe)$overall[1]
+      model2_acc[i]  <- acc2
+}
+```
+```{r, echo=FALSE}
+######################################### IMPORTANT ########################################
+# The above code block for cross-validation works terribly slow on knitr (I don't know why!)
+# Therefore the code was run in R console outside knitr and results were saved as vectors
+model1_acc <- c(0.6825828, 0.6897196, 0.6888700, 0.6778250, 0.6910790, 0.6907392, 0.6914189, 0.7289720, 0.6751062, 0.6997451, 0.6859813, 0.6871708, 0.6995752, 0.6836024, 0.6905692, 0.6849618, 0.6888700, 0.6905692, 0.6980459, 0.6847918, 0.7000850, 0.6728972, 0.6946474, 0.6893798, 0.6953271, 0.6941376, 0.7004248, 0.6903993, 0.7172472, 0.6970263)
+model2_acc  <- c(0.9926933, 0.9942226, 0.9921835, 0.9949023, 0.9921835, 0.9918437, 0.9904843, 0.9954121, 0.9915038, 0.9937128, 0.9942226, 0.9938828, 0.9950722, 0.9925234, 0.9947324, 0.9926933, 0.9930331, 0.9930331, 0.9938828, 0.9942226, 0.9945624, 0.9904843, 0.9921835, 0.9957519, 0.9930331, 0.9938828, 0.9933730, 0.9945624, 0.9933730, 0.9947324)
+######################################### IMPORTANT ########################################
+```
+
+We compare two models by plotting histograms of accuracy distributions:
+
+```{r}
+# Plotting histograms of models' accuracy
+par(mfrow=c(1,2))
+hist(model1_acc,10)
+hist(model2_acc,10)
+#Expected out of sample error for model2
+round((1-mean(model2_acc))*100,1)
+```
+
+As can bee seen from both histograms, random forests prediction is less variable and much more accurate than predicting with trees. The expected out of sample error of `model2` is **0.7%**. Therefore, we select `model2` as a final prediction model.
+
+#### 5. Prediction
+
+Finnaly, we apply `model2` to the original training dataset and save each result in a separate text file in the working directory.
+
+```{r, eval=FALSE}
+#Predicting final results
+pred_final  <- predict(model2,newdata=testing)
+
+#Saving prediction results 
+pml_write_files = function(x){
+      n = length(x)
+      for(i in 1:n){
+            filename = paste0("problem_id_",i,".txt")
+            write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+      }
+}
+
+#Caling a function to save results
+pml_write_files(pred_final)
+```
+
+
